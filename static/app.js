@@ -1,28 +1,277 @@
+import * as THREE from './vendor/three/build/three.module.js';
+import { GLTFLoader } from './vendor/three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from './vendor/three/examples/jsm/libs/meshopt_decoder.module.js';
+
 (() => {
   const $ = (selector) => document.querySelector(selector);
   const state = {
-    heightUnit: 'cm', weightUnit: 'kg', heightCm: 170, weightKg: 68,
-    file: null, originalUrl: null, displayUrl: null, demo: false,
-    measured: null, rotation: 0, comparing: false, cameraStream: null,
+    gender: 'men', heightUnit: 'cm', weightUnit: 'kg', heightCm: 170, weightKg: 68,
+    originalUrl: null, displayUrl: null, cropUrl: null, demo: false, measured: null,
+    comparing: false, cameraStream: null, yaw: 0, targetYaw: 0,
   };
-
   const heightInput = $('#height-input');
   const weightInput = $('#weight-input');
-  const rig = $('#avatar-rig');
-  const overlay = $('#garment-overlay');
-  const layer = $('#garment-layer');
   const stage = $('#avatar-stage');
-  const scanStatus = $('#scan-status');
-  const reader = new FileReader();
+  const canvas = $('#avatar-canvas');
+  const loader = new GLTFLoader();
+  loader.setMeshoptDecoder(MeshoptDecoder);
+  let renderer;
+  let scene;
+  let camera;
+  let avatarRoot;
+  let modelObject;
+  let latestTextureRequest = 0;
+  let requestId = 0;
+  let mixer = null;
+  let activePointer = null;
+  let previousFrame = 0;
+  let currentViewLabel = '';
+  const modelBox = $('#model-fallback');
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   function setStatus(message, kind = 'idle') {
-    scanStatus.dataset.state = kind;
-    scanStatus.querySelector('span:last-child').textContent = message;
+    const status = $('#scan-status');
+    status.dataset.state = kind;
+    status.querySelector('span').textContent = message;
   }
 
-  function heightValueInInput() {
-    if (state.heightUnit === 'cm') return `${Math.round(state.heightCm)} cm`;
-    return `${(state.heightCm / 30.48).toFixed(2)} ft`;
+  function setModelStatus(message, kind = 'idle') {
+    const status = $('.model-status');
+    status.dataset.state = kind;
+    $('#model-status').textContent = message;
+  }
+
+  function initViewer() {
+    try {
+      renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: 'high-performance' });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.7));
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.08;
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(27, 1, .1, 100);
+      camera.position.set(0, 1.14, 5.7);
+      camera.lookAt(0, 1.1, 0);
+      scene.add(new THREE.HemisphereLight(0xffffff, 0xe1d5ca, 2.15));
+      const key = new THREE.DirectionalLight(0xffffff, 2.1);
+      key.position.set(-2.6, 4.4, 5.0);
+      scene.add(key);
+      const fill = new THREE.DirectionalLight(0xffe4d5, .55);
+      fill.position.set(3, 1.2, -1.5);
+      scene.add(fill);
+      avatarRoot = new THREE.Group();
+      scene.add(avatarRoot);
+      resizeViewer();
+      new ResizeObserver(resizeViewer).observe(stage);
+      window.addEventListener('resize', resizeViewer, { passive: true });
+      canvas.addEventListener('pointerdown', onPointerDown);
+      canvas.addEventListener('pointermove', onPointerMove);
+      canvas.addEventListener('pointerup', onPointerUp);
+      canvas.addEventListener('pointercancel', onPointerUp);
+      requestAnimationFrame(renderFrame);
+      loadModel(state.gender);
+    } catch (_error) {
+      modelBox.hidden = false;
+      setModelStatus('3D view is unavailable in this browser.', 'error');
+    }
+  }
+
+  function resizeViewer() {
+    if (!renderer || !camera) return;
+    const width = Math.max(1, stage.clientWidth);
+    const height = Math.max(1, stage.clientHeight);
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    sizeGarmentPlane();
+  }
+
+  function clearRoot() {
+    if (!avatarRoot) return;
+    avatarRoot.traverse((item) => {
+      if (!item.isMesh) return;
+      item.geometry?.dispose?.();
+      const mats = Array.isArray(item.material) ? item.material : [item.material];
+      mats.forEach((material) => {
+        if (material) material.dispose?.();
+      });
+    });
+    avatarRoot.clear();
+    modelObject = null;
+    mixer = null;
+  }
+
+  function loadModel(gender) {
+    state.gender = gender;
+    const thisRequest = ++requestId;
+    state.yaw = 0;
+    state.targetYaw = 0;
+    if (avatarRoot) avatarRoot.rotation.y = 0;
+    setGarmentVisible(false);
+    if (modelObject) clearRoot();
+    modelBox.hidden = true;
+    const name = gender === 'women' ? 'FEMALE' : 'MALE';
+    $('#stage-model-name').textContent = `${name} FITTING MODEL`;
+    document.querySelectorAll('.model-choice').forEach((button) => {
+      const active = (gender === 'men' && button.id === 'model-male') || (gender === 'women' && button.id === 'model-female');
+      button.classList.toggle('selected', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+    setModelStatus(`Loading ${name.toLowerCase()} model…`);
+    loader.load(`/static/models/${gender}.glb`, (gltf) => {
+      if (thisRequest !== requestId) return;
+      clearRoot();
+      modelObject = gltf.scene;
+      modelObject.rotation.y = -Math.PI / 2;
+      modelObject.traverse((item) => {
+        if (!item.isMesh) return;
+        item.castShadow = false;
+        item.receiveShadow = false;
+        if (Array.isArray(item.material)) item.material.forEach((mat) => { if ('roughness' in mat) mat.roughness = Math.max(.48, mat.roughness || .6); });
+        else if (item.material && 'roughness' in item.material) item.material.roughness = Math.max(.48, item.material.roughness || .6);
+      });
+      let bounds = new THREE.Box3().setFromObject(modelObject);
+      const initialSize = bounds.getSize(new THREE.Vector3());
+      if (!Number.isFinite(initialSize.y) || initialSize.y < .01) throw new Error('The model has no usable height.');
+      modelObject.scale.setScalar(2.16 / initialSize.y);
+      bounds = new THREE.Box3().setFromObject(modelObject);
+      const center = bounds.getCenter(new THREE.Vector3());
+      modelObject.position.x -= center.x;
+      modelObject.position.z -= center.z;
+      modelObject.position.y -= bounds.min.y;
+      avatarRoot.add(modelObject);
+      modelObject.updateMatrixWorld(true);
+      if (gltf.animations?.length) {
+        mixer = new THREE.AnimationMixer(modelObject);
+        gltf.animations.forEach((clip) => mixer.clipAction(clip).play());
+      }
+      modelBox.hidden = true;
+      updateProfileShape();
+      if (state.displayUrl) setGarment(state.displayUrl);
+      $('#model-body-note').textContent = `${gender === 'women' ? 'Female' : 'Male'} model · profile estimate, not a body scan`;
+      setModelStatus(`${name[0]}${name.slice(1).toLowerCase()} model ready`);
+    }, undefined, () => {
+      if (thisRequest !== requestId) return;
+      modelBox.hidden = false;
+      setModelStatus(`${name[0]}${name.slice(1).toLowerCase()} model unavailable`, 'error');
+    });
+  }
+
+  function sizeGarmentPlane() {
+    const overlay = $('#garment-overlay');
+    const userScale = Number($('#garment-size')?.value || 68) / 68;
+    const position = Number($('#garment-position')?.value || 52);
+    const stageWidth = Math.max(1, stage.clientWidth);
+    const stageHeight = Math.max(1, stage.clientHeight);
+    const dimensions = state.measured?.status === 'calibrated_estimate' ? state.measured.dimensions : null;
+    const imageAspect = overlay.naturalWidth > 0 && overlay.naturalHeight > 0 ? overlay.naturalWidth / overlay.naturalHeight : .45;
+    let width = stageWidth * .22 * userScale;
+    let height = width / imageAspect;
+    if (dimensions?.widthCm > 0 && dimensions?.heightCm > 0 && state.heightCm > 0) {
+      height = stageHeight * .8 * (dimensions.heightCm / state.heightCm) * userScale;
+      width = height * (dimensions.widthCm / dimensions.heightCm);
+    }
+    const fitScale = Math.min(1, (stageWidth * .42) / width, (stageHeight * .72) / height);
+    width *= fitScale;
+    height *= fitScale;
+    overlay.style.width = `${width}px`;
+    overlay.style.height = `${height}px`;
+    overlay.style.top = `${47 + (position - 52) * .24}%`;
+    overlay.style.opacity = String(Number($('#garment-opacity')?.value || 92) / 100);
+  }
+
+  function setGarment(url) {
+    const overlay = $('#garment-overlay');
+    if (!overlay || !url) return;
+    const thisRequest = ++latestTextureRequest;
+    overlay.hidden = true;
+    overlay.onload = () => {
+      if (thisRequest !== latestTextureRequest) return;
+      overlay.hidden = false;
+      sizeGarmentPlane();
+      updateViewLabel();
+    };
+    overlay.onerror = () => {
+      if (thisRequest === latestTextureRequest) setStatus('Image preview could not be applied to the model. Try another image.', 'error');
+    };
+    overlay.src = url;
+    if (overlay.complete && overlay.naturalWidth > 0) {
+      overlay.hidden = false;
+      sizeGarmentPlane();
+      updateViewLabel();
+    }
+  }
+
+  function setGarmentVisible(visible) {
+    const overlay = $('#garment-overlay');
+    const hidden = !visible || state.comparing || !state.displayUrl;
+    if (overlay && overlay.hidden !== hidden) overlay.hidden = hidden;
+  }
+
+  function setProfileScales(width, height) {
+    if (!avatarRoot || !modelObject) return;
+    avatarRoot.scale.set(width, height, width);
+    sizeGarmentPlane();
+  }
+
+  function updateProfileShape() {
+    const bmi = state.weightKg / ((state.heightCm / 100) ** 2);
+    const width = Math.max(.86, Math.min(1.2, 1 + (bmi - 22) * .008));
+    const height = Math.max(.92, Math.min(1.08, state.heightCm / 170));
+    setProfileScales(width, height);
+  }
+
+  function onPointerDown(event) {
+    if (!modelObject || state.comparing) return;
+    activePointer = { id: event.pointerId, x: event.clientX };
+    canvas.setPointerCapture(event.pointerId);
+  }
+
+  function onPointerMove(event) {
+    if (!activePointer || activePointer.id !== event.pointerId) return;
+    const deltaX = event.clientX - activePointer.x;
+    activePointer.x = event.clientX;
+    state.yaw += deltaX * .009;
+    state.targetYaw = state.yaw;
+    avatarRoot.rotation.y = state.yaw;
+    updateViewLabel();
+  }
+
+  function onPointerUp(event) {
+    if (activePointer?.id !== event.pointerId) return;
+    activePointer = null;
+  }
+
+  function updateViewLabel() {
+    const angle = ((state.yaw % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    const frontDistance = Math.min(angle, Math.PI * 2 - angle);
+    const label = frontDistance < .35 ? 'FRONT VIEW' : (Math.abs(angle - Math.PI) < .4 ? 'BACK VIEW' : 'TURNED VIEW');
+    if (label !== currentViewLabel) {
+      $('#stage-mode').textContent = label;
+      currentViewLabel = label;
+    }
+    setGarmentVisible(frontDistance < .35);
+  }
+
+  function renderFrame(time) {
+    requestAnimationFrame(renderFrame);
+    if (!renderer || !scene || !camera) return;
+    const delta = previousFrame ? Math.min(.05, (time - previousFrame) / 1000) : 0;
+    previousFrame = time;
+    if (mixer) mixer.update(delta);
+    if (avatarRoot && modelObject && !activePointer) {
+      const difference = state.targetYaw - state.yaw;
+      state.yaw += difference * Math.min(1, delta * 5);
+      const idle = reducedMotion ? 0 : Math.sin(time * .00065) * .035;
+      avatarRoot.rotation.y = state.yaw + (state.targetYaw === 0 ? idle : 0);
+      avatarRoot.position.y = reducedMotion ? 0 : Math.sin(time * .0011) * .004;
+      updateViewLabel();
+    }
+    renderer.render(scene, camera);
+  }
+
+  function heightLabel() {
+    return state.heightUnit === 'cm' ? `${Math.round(state.heightCm)} cm` : `${(state.heightCm / 30.48).toFixed(2)} ft`;
   }
 
   function parseHeight() {
@@ -30,7 +279,7 @@
     const min = state.heightUnit === 'cm' ? 100 : 3.3;
     const max = state.heightUnit === 'cm' ? 240 : 7.9;
     if (!Number.isFinite(value) || value < min || value > max) {
-      $('#height-error').textContent = state.heightUnit === 'cm' ? 'Enter a height between 100 and 240 cm.' : 'Enter a height between 3.3 and 7.9 ft.';
+      $('#height-error').textContent = state.heightUnit === 'cm' ? 'Use 100–240 cm.' : 'Use 3.3–7.9 ft.';
       heightInput.setAttribute('aria-invalid', 'true');
       return false;
     }
@@ -45,57 +294,41 @@
     const min = state.weightUnit === 'kg' ? 25 : 55;
     const max = state.weightUnit === 'kg' ? 300 : 661;
     if (!Number.isFinite(value) || value < min || value > max) {
-      $('#weight-error').textContent = state.weightUnit === 'kg' ? 'Enter a weight between 25 and 300 kg.' : 'Enter a weight between 55 and 661 lb.';
+      $('#weight-error').textContent = state.weightUnit === 'kg' ? 'Use 25–300 kg.' : 'Use 55–661 lb.';
       weightInput.setAttribute('aria-invalid', 'true');
       return false;
     }
     $('#weight-error').textContent = '';
     weightInput.removeAttribute('aria-invalid');
-    state.weightKg = state.weightUnit === 'kg' ? value : value * 0.45359237;
+    state.weightKg = state.weightUnit === 'kg' ? value : value * .45359237;
     return true;
   }
 
   function updateProfile() {
-    const heightOk = parseHeight();
-    const weightOk = parseWeight();
-    if (!heightOk || !weightOk) return;
-    const bmi = state.weightKg / ((state.heightCm / 100) ** 2);
-    const widthScale = Math.max(.88, Math.min(1.22, 1 + (bmi - 22) * .009));
-    const heightScale = Math.max(.9, Math.min(1.1, state.heightCm / 170));
-    rig.style.setProperty('--shape-width', widthScale.toFixed(3));
-    rig.style.setProperty('--shape-height', heightScale.toFixed(3));
-    updateAvatarTransform();
-    const unitLabel = state.heightUnit === 'cm' ? `${Math.round(state.heightCm)} cm` : heightValueInInput();
-    $('#profile-readout').textContent = `Approximate proportions · ${unitLabel} · not saved`;
-  }
-
-  function updateAvatarTransform() {
-    const width = rig.style.getPropertyValue('--shape-width') || '1';
-    const height = rig.style.getPropertyValue('--shape-height') || '1';
-    rig.style.transform = `translate(-50%,-50%) scaleX(${width}) scaleY(${height}) rotateY(${state.rotation}deg)`;
+    if (!parseHeight() || !parseWeight()) return;
+    updateProfileShape();
+    $('#profile-readout').textContent = `${heightLabel()} · approximate proportions`;
+    $('#model-body-note').textContent = `${state.gender === 'men' ? 'Male' : 'Female'} model · profile estimate, not a body scan`;
   }
 
   function updateRangeStyles() {
-    $('#garment-overlay').style.opacity = `${$('#garment-opacity').value / 100}`;
-    layer.style.setProperty('--garment-width', `${$('#garment-size').value}%`);
-    layer.style.setProperty('--garment-top', `${$('#garment-position').value}%`);
     $('#size-output').value = `${$('#garment-size').value}%`;
     $('#position-output').value = `${$('#garment-position').value}%`;
     $('#opacity-output').value = `${$('#garment-opacity').value}%`;
+    sizeGarmentPlane();
   }
 
-  function lightBackgroundCutout(sourceUrl, enabled) {
-    if (!enabled) return Promise.resolve(sourceUrl);
+  function lightBackgroundCutout(sourceUrl) {
     return new Promise((resolve) => {
       const image = new Image();
       image.onload = () => {
         const scale = Math.min(1, 900 / Math.max(image.naturalWidth, image.naturalHeight));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-        const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const work = document.createElement('canvas');
+        work.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        work.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const context = work.getContext('2d', { willReadFrequently: true });
+        context.drawImage(image, 0, 0, work.width, work.height);
+        const pixels = context.getImageData(0, 0, work.width, work.height);
         const { data, width, height } = pixels;
         const edge = Math.max(1, Math.min(5, Math.round(Math.min(width, height) * .025)));
         const corners = [];
@@ -106,98 +339,106 @@
           }
           corners.push([r / count, g / count, b / count]);
         }
-        const target = corners.reduce((acc, c) => acc.map((v, i) => v + c[i] / corners.length), [0, 0, 0]);
-        const cornerSpread = Math.max(...corners.map((c) => Math.hypot(c[0] - target[0], c[1] - target[1], c[2] - target[2])));
-        const isLight = (target[0] + target[1] + target[2]) / 3 > 145;
-        const tolerance = cornerSpread < 35 ? 48 : 30;
-        if (cornerSpread > 90 || !isLight) {
-          setStatus('Backdrop cutout was skipped: image corners do not look like one light, plain background.', 'idle');
+        const target = corners.reduce((acc, color) => acc.map((value, i) => value + color[i] / corners.length), [0, 0, 0]);
+        const spread = Math.max(...corners.map((color) => Math.hypot(color[0] - target[0], color[1] - target[1], color[2] - target[2])));
+        const light = (target[0] + target[1] + target[2]) / 3 > 145;
+        if (spread > 90 || !light) {
+          setStatus('Backdrop cutout skipped: corners are not one light plain background.', 'idle');
           resolve(sourceUrl);
           return;
         }
+        const tolerance = spread < 35 ? 48 : 30;
         for (let i = 0; i < data.length; i += 4) {
           const distance = Math.hypot(data[i] - target[0], data[i + 1] - target[1], data[i + 2] - target[2]);
           const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
           if (distance < tolerance && brightness > 130) data[i + 3] = 0;
           else if (distance < tolerance * 1.35 && brightness > 165) data[i + 3] = Math.round(data[i + 3] * .65);
         }
-        ctx.putImageData(pixels, 0, 0);
-        resolve(canvas.toDataURL('image/png'));
+        context.putImageData(pixels, 0, 0);
+        resolve(work.toDataURL('image/png'));
       };
       image.onerror = () => resolve(sourceUrl);
       image.src = sourceUrl;
     });
   }
 
-  async function applyGarment(url, name, isDemo = false) {
-    state.originalUrl = url;
-    state.displayUrl = url;
-    state.demo = isDemo;
-    state.measured = null;
-    $('#dimension-readout').hidden = true;
-    $('#stage-dimension').hidden = true;
-    $('#calibration-legend').innerHTML = '<i class="legend-dot dot-unmeasured"></i> Not calibrated';
-    $('#confidence-note').innerHTML = '<span class="confidence-mark">i</span><p><strong>A visual approximation.</strong> This avatar uses height and weight only. It doesn\'t model full body shape, depth, fabric drape or stretch, tailoring, comfort, or guaranteed real-world fit.</p>';
-    $('#compare-button').disabled = false;
-    $('#comparison-image').src = url;
-    $('#garment-caption').textContent = isDemo ? 'Sample silhouette · not measured' : `${name} · not measured yet`;
-    $('#stage-mode').textContent = 'AVATAR STUDY · FRONT';
-    overlay.src = url;
-    overlay.hidden = false;
-    $('#scan-button').disabled = isDemo;
-    if (isDemo) {
-      $('#scan-button').textContent = 'Sample garment · not measurable';
-      setStatus('Sample dress loaded. Its illustrative shape is not calibrated or measured.', 'idle');
-    } else {
-      $('#scan-button').textContent = '⌕  Scan garment dimensions';
-      setStatus('Dress added. Add marker #0 in the same plane for calibrated dimensions.', 'idle');
-    }
-    if ($('#cutout-toggle').checked && !isDemo) {
-      state.displayUrl = await lightBackgroundCutout(url, true);
-      overlay.src = state.displayUrl;
-    }
-    updateRangeStyles();
-    $('#compare-button').disabled = false;
-    setComparing(false);
-  }
-
   function fileToDataUrl(file) {
     return new Promise((resolve, reject) => {
-      const fr = new FileReader();
-      fr.onload = () => resolve(String(fr.result));
-      fr.onerror = reject;
-      fr.readAsDataURL(file);
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function cropImageToBounds(sourceUrl, bounds) {
+    return new Promise((resolve) => {
+      const image = new Image();
+      image.onload = () => {
+        const sourceWidth = image.naturalWidth;
+        const sourceHeight = image.naturalHeight;
+        const ratioX = sourceWidth / (Number(bounds.imageWidth) || sourceWidth);
+        const ratioY = sourceHeight / (Number(bounds.imageHeight) || sourceHeight);
+        const x = Number(bounds.x) * ratioX;
+        const y = Number(bounds.y) * ratioY;
+        const width = Number(bounds.width) * ratioX;
+        const height = Number(bounds.height) * ratioY;
+        if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) { resolve(sourceUrl); return; }
+        const marginX = Math.max(2, width * .025);
+        const marginY = Math.max(2, height * .025);
+        const left = Math.max(0, Math.floor(x - marginX));
+        const top = Math.max(0, Math.floor(y - marginY));
+        const right = Math.min(sourceWidth, Math.ceil(x + width + marginX));
+        const bottom = Math.min(sourceHeight, Math.ceil(y + height + marginY));
+        const cropped = document.createElement('canvas');
+        cropped.width = Math.max(1, right - left);
+        cropped.height = Math.max(1, bottom - top);
+        const context = cropped.getContext('2d');
+        if (!context) { resolve(sourceUrl); return; }
+        context.drawImage(image, left, top, cropped.width, cropped.height, 0, 0, cropped.width, cropped.height);
+        resolve(cropped.toDataURL('image/png'));
+      };
+      image.onerror = () => resolve(sourceUrl);
+      image.src = sourceUrl;
     });
   }
 
   async function handleFile(file) {
     if (!file) return;
-    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) {
-      setStatus('Choose a JPG, PNG, or WebP image.', 'error');
-      return;
-    }
-    if (file.size > 12 * 1024 * 1024) {
-      setStatus('This file is over 12 MB. Choose a smaller image.', 'error');
-      return;
-    }
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) { setStatus('Choose a JPG, PNG, or WebP image.', 'error'); return; }
+    if (file.size > 12 * 1024 * 1024) { setStatus('This file is over 12 MB. Choose a smaller image.', 'error'); return; }
     try {
-      state.file = file;
       const url = await fileToDataUrl(file);
       await applyGarment(url, file.name, false);
-    } catch (_error) {
-      setStatus('This image could not be opened. Try another file.', 'error');
-    }
+    } catch (_error) { setStatus('This image could not be opened. Try another file.', 'error'); }
+  }
+
+  async function applyGarment(url, name, isDemo = false) {
+    state.originalUrl = url;
+    state.displayUrl = url;
+    state.cropUrl = null;
+    state.demo = isDemo;
+    state.measured = null;
+    $('#dimension-readout').hidden = true;
+    $('#confidence-note').innerHTML = '<strong>Approximate preview.</strong> The image layer is flat; no cloth simulation or guaranteed fit.';
+    $('#compare-button').disabled = false;
+    $('#restart-button').disabled = false;
+    $('#comparison-image').src = url;
+    $('#garment-caption').textContent = isDemo ? 'Sample garment · not calibrated' : `${name} · not measured`;
+    if ($('#cutout-toggle').checked && !isDemo) state.displayUrl = await lightBackgroundCutout(url);
+    setGarment(state.displayUrl);
+    $('#scan-button').disabled = isDemo;
+    $('#scan-button').textContent = isDemo ? 'Sample dress · not measurable' : 'Scan garment dimensions';
+    setStatus(isDemo ? 'Sample dress loaded; its shape is illustrative only.' : 'Dress added. Add marker #0 in the same plane for a size estimate.', 'idle');
+    setComparing(false);
   }
 
   async function scanCurrentImage() {
     if (!state.originalUrl || state.demo) return;
     $('#scan-button').disabled = true;
-    setStatus('Looking for the printed 5 cm ArUco marker and garment outline…', 'busy');
+    setStatus('Looking for the 5 cm ArUco marker and garment outline…', 'busy');
     try {
-      const response = await fetch('/api/scan', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64: state.originalUrl }),
-      });
+      const response = await fetch('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: state.originalUrl }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Scan failed. Try another image.');
       state.measured = result;
@@ -206,53 +447,52 @@
         $('#dimension-width').textContent = widthCm.toFixed(1);
         $('#dimension-height').textContent = heightCm.toFixed(1);
         $('#dimension-readout').hidden = false;
-        $('#stage-dimension-value').textContent = `${widthCm.toFixed(1)} × ${heightCm.toFixed(1)} cm`;
-        $('#stage-dimension').hidden = false;
-        $('#garment-caption').textContent = `${widthCm.toFixed(1)} cm wide · ${heightCm.toFixed(1)} cm long · contour estimate`;
-        $('#calibration-legend').innerHTML = '<i class="legend-dot dot-measured"></i> Marker-calibrated estimate';
-        $('#confidence-note').innerHTML = `<span class="confidence-mark">i</span><p><strong>Marker calibrated; not independently verified.</strong> ${escapeHtml(result.confidenceNote || result.guidance)} Perspective and same-plane alignment may affect the estimate. This is not a fit guarantee.</p>`;
+        $('#garment-caption').textContent = `${widthCm.toFixed(1)} × ${heightCm.toFixed(1)} cm · contour estimate`;
+        $('#confidence-note').innerHTML = `<strong>Marker calibrated, not independently verified.</strong> ${escapeHtml(result.confidenceNote || result.guidance)} The flat layer is scaled against your entered height; this is not a body scan or fit guarantee.`;
+        if (result.garmentBounds) {
+          state.cropUrl = await cropImageToBounds(state.originalUrl, result.garmentBounds);
+          const garmentImage = state.cropUrl || state.originalUrl;
+          state.displayUrl = $('#cutout-toggle').checked ? await lightBackgroundCutout(garmentImage) : garmentImage;
+          setGarment(state.displayUrl);
+        }
       } else {
         $('#dimension-readout').hidden = true;
-        $('#stage-dimension').hidden = true;
-        $('#garment-caption').textContent = 'Preview only · garment size not calibrated';
-        $('#calibration-legend').innerHTML = '<i class="legend-dot dot-unmeasured"></i> Not calibrated';
+        $('#garment-caption').textContent = 'Preview only · not calibrated';
+        $('#confidence-note').innerHTML = '<strong>No calibrated dimensions.</strong> The marker or garment outline could not be measured.';
       }
-      setStatus(result.message + ' ' + result.guidance, result.dimensions ? 'success' : 'error');
-    } catch (error) {
-      setStatus(error.message || 'The scan could not reach the measurement service.', 'error');
-    } finally {
-      $('#scan-button').disabled = !state.originalUrl || state.demo;
-    }
+      sizeGarmentPlane();
+      const cropNote = result.garmentBounds ? ' The fitting layer excludes the separate marker; Compare retains the full scan.' : '';
+      setStatus(`${result.message} ${result.guidance}${cropNote}`, result.dimensions ? 'success' : 'error');
+    } catch (error) { setStatus(error.message || 'The scan could not reach the measurement service.', 'error'); }
+    finally { $('#scan-button').disabled = state.demo || !state.originalUrl; }
   }
 
   function escapeHtml(text) {
-    return String(text).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+    return String(text).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
   }
 
   function setComparing(enabled) {
     state.comparing = enabled;
-    stage.dataset.comparing = enabled ? 'true' : 'false';
+    stage.dataset.comparing = String(enabled);
     $('#comparison-view').hidden = !enabled;
-    $('#compare-button').textContent = enabled ? 'Back to avatar' : 'Compare image';
-    $('#stage-mode').textContent = enabled ? 'GARMENT IMAGE · BEFORE' : 'AVATAR STUDY · FRONT';
+    $('#compare-button').textContent = enabled ? 'Back to model' : 'Compare';
+    canvas.style.visibility = enabled ? 'hidden' : 'visible';
+    updateViewLabel();
   }
 
   function updateCutout() {
     if (!state.originalUrl || state.demo) return;
+    const sourceUrl = state.cropUrl || state.originalUrl;
     if ($('#cutout-toggle').checked) {
-      lightBackgroundCutout(state.originalUrl, true).then((url) => {
-        state.displayUrl = url;
-        overlay.src = url;
-      });
+      lightBackgroundCutout(sourceUrl).then((url) => { state.displayUrl = url; setGarment(url); });
     } else {
-      state.displayUrl = state.originalUrl;
-      overlay.src = state.originalUrl;
+      state.displayUrl = sourceUrl;
+      setGarment(state.displayUrl);
     }
   }
 
   function useDemoDress() {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 460"><path d="M92 28 140 42 188 28l39 34-35 42-21-14 44 97 49 230H64l49-230 44-97-21 14-35-42z" fill="#d98f70" stroke="#183a47" stroke-width="3" stroke-linejoin="round"/><path d="m102 44 38 31 38-31M140 75v61M112 171h56" fill="none" stroke="#f6ded2" stroke-width="4" opacity=".75"/><path d="M72 418h136" stroke="#a75f45" stroke-width="2" stroke-dasharray="5 5"/></svg>`;
-    state.file = null;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="280" height="620" viewBox="0 0 280 620"><path d="M96 30 140 46 184 30 230 72 199 111 178 96 195 185 248 590H32L85 185 102 96 81 111 50 72z" fill="#d98f70" stroke="#183a47" stroke-width="3" stroke-linejoin="round"/><path d="M100 43 140 75 180 43M140 75v110M87 185h106" fill="none" stroke="#f6ded2" stroke-width="4" opacity=".75"/><path d="M39 560h202" stroke="#a75f45" stroke-width="2" stroke-dasharray="5 5"/></svg>`;
     $('#dress-file').value = '';
     $('#cutout-toggle').checked = false;
     applyGarment(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, 'Sample dress', true);
@@ -260,19 +500,12 @@
 
   async function openCamera() {
     $('#camera-error').textContent = '';
-    if (!navigator.mediaDevices?.getUserMedia) {
-      $('#camera-error').textContent = 'Camera capture is not available in this browser. Upload a photo instead.';
-      $('#camera-dialog').showModal();
-      return;
-    }
+    if (!navigator.mediaDevices?.getUserMedia) { $('#camera-error').textContent = 'Camera capture is not available here. Upload a photo instead.'; $('#camera-dialog').showModal(); return; }
     try {
       state.cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
       $('#camera-video').srcObject = state.cameraStream;
       $('#camera-dialog').showModal();
-    } catch (_error) {
-      $('#camera-error').textContent = 'Camera access was unavailable. Allow camera permission or upload a photo instead.';
-      $('#camera-dialog').showModal();
-    }
+    } catch (_error) { $('#camera-error').textContent = 'Allow camera access, or upload a photo instead.'; $('#camera-dialog').showModal(); }
   }
 
   function closeCamera() {
@@ -281,50 +514,77 @@
     $('#camera-video').srcObject = null;
   }
 
-  $('#dress-file').addEventListener('change', (event) => handleFile(event.target.files[0]));
-  $('#demo-button').addEventListener('click', useDemoDress);
-  $('#scan-button').addEventListener('click', scanCurrentImage);
-  $('#height-input').addEventListener('input', updateProfile);
-  $('#weight-input').addEventListener('input', updateProfile);
-  document.querySelectorAll('[data-height-unit]').forEach((button) => button.addEventListener('click', () => {
+  function changeHeightUnit(button) {
     if (button.dataset.heightUnit === state.heightUnit) return;
-    parseHeight();
-    state.heightUnit = button.dataset.heightUnit;
-    document.querySelectorAll('[data-height-unit]').forEach((item) => { item.classList.toggle('active', item === button); item.setAttribute('aria-pressed', item === button ? 'true' : 'false'); });
-    $('#height-unit-label').textContent = state.heightUnit === 'cm' ? 'cm' : 'decimal ft';
-    $('#height-suffix').textContent = state.heightUnit === 'cm' ? 'cm' : 'ft';
+    if (parseHeight()) state.heightUnit = button.dataset.heightUnit;
+    else state.heightUnit = button.dataset.heightUnit;
+    document.querySelectorAll('[data-height-unit]').forEach((item) => { const active = item === button; item.classList.toggle('active', active); item.setAttribute('aria-pressed', String(active)); });
+    $('#height-suffix').textContent = state.heightUnit;
     heightInput.value = state.heightUnit === 'cm' ? Math.round(state.heightCm) : (state.heightCm / 30.48).toFixed(2);
     heightInput.min = state.heightUnit === 'cm' ? '100' : '3.3';
     heightInput.max = state.heightUnit === 'cm' ? '240' : '7.9';
     heightInput.step = state.heightUnit === 'cm' ? '1' : '0.01';
     updateProfile();
-  }));
-  document.querySelectorAll('[data-weight-unit]').forEach((button) => button.addEventListener('click', () => {
+  }
+
+  function changeWeightUnit(button) {
     if (button.dataset.weightUnit === state.weightUnit) return;
     parseWeight();
     state.weightUnit = button.dataset.weightUnit;
-    document.querySelectorAll('[data-weight-unit]').forEach((item) => { item.classList.toggle('active', item === button); item.setAttribute('aria-pressed', item === button ? 'true' : 'false'); });
-    $('#weight-unit-label').textContent = state.weightUnit;
+    document.querySelectorAll('[data-weight-unit]').forEach((item) => { const active = item === button; item.classList.toggle('active', active); item.setAttribute('aria-pressed', String(active)); });
     $('#weight-suffix').textContent = state.weightUnit;
     weightInput.value = state.weightUnit === 'kg' ? state.weightKg.toFixed(1) : (state.weightKg / .45359237).toFixed(1);
     weightInput.min = state.weightUnit === 'kg' ? '25' : '55';
     weightInput.max = state.weightUnit === 'kg' ? '300' : '661';
     updateProfile();
-  }));
+  }
+
+  function resetDress() {
+    state.originalUrl = null;
+    state.displayUrl = null;
+    state.cropUrl = null;
+    state.demo = false;
+    state.measured = null;
+    $('#dress-file').value = '';
+    $('#cutout-toggle').checked = false;
+    $('#garment-size').value = 68;
+    $('#garment-position').value = 52;
+    $('#garment-opacity').value = 92;
+    updateRangeStyles();
+    latestTextureRequest++;
+    const overlay = $('#garment-overlay');
+    overlay.hidden = true;
+    overlay.removeAttribute('src');
+    $('#dimension-readout').hidden = true;
+    $('#confidence-note').innerHTML = '<strong>Approximate preview.</strong> The image layer is flat; no cloth simulation or guaranteed fit.';
+    $('#garment-caption').textContent = 'Select a model or add a dress';
+    $('#scan-button').disabled = true;
+    $('#scan-button').textContent = 'Scan garment dimensions';
+    $('#compare-button').disabled = true;
+    $('#restart-button').disabled = true;
+    setComparing(false);
+    setStatus('Add a dress image to begin.', 'idle');
+  }
+
+  $('#dress-file').addEventListener('change', (event) => handleFile(event.target.files[0]));
+  $('#demo-button').addEventListener('click', useDemoDress);
+  $('#scan-button').addEventListener('click', scanCurrentImage);
+  $('#height-input').addEventListener('input', updateProfile);
+  $('#weight-input').addEventListener('input', updateProfile);
+  document.querySelectorAll('[data-height-unit]').forEach((button) => button.addEventListener('click', () => changeHeightUnit(button)));
+  document.querySelectorAll('[data-weight-unit]').forEach((button) => button.addEventListener('click', () => changeWeightUnit(button)));
   ['garment-size', 'garment-position', 'garment-opacity'].forEach((id) => $(`#${id}`).addEventListener('input', updateRangeStyles));
   $('#cutout-toggle').addEventListener('change', updateCutout);
   $('#camera-button').addEventListener('click', openCamera);
   $('#capture-button').addEventListener('click', () => {
     const video = $('#camera-video');
     if (!video.videoWidth) { $('#camera-error').textContent = 'Wait for the camera image, then capture again.'; return; }
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
-    const dataUrl = canvas.toDataURL('image/jpeg', .9);
-    closeCamera(); $('#camera-dialog').close();
-    $('#dress-file').value = '';
-    state.file = null;
-    applyGarment(dataUrl, 'Camera capture', false);
+    const work = document.createElement('canvas');
+    work.width = video.videoWidth; work.height = video.videoHeight;
+    work.getContext('2d').drawImage(video, 0, 0);
+    const url = work.toDataURL('image/jpeg', .9);
+    closeCamera(); $('#camera-dialog').close(); $('#dress-file').value = '';
+    applyGarment(url, 'Camera capture', false);
   });
   document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => {
     const dialog = $(`#${button.dataset.close}`);
@@ -334,43 +594,22 @@
   $('#camera-dialog').addEventListener('close', closeCamera);
   $('#marker-open').addEventListener('click', () => $('#marker-dialog').showModal());
   $('#print-button').addEventListener('click', () => window.print());
-  $('#restart-button').addEventListener('click', () => {
-    state.file = null; state.originalUrl = null; state.displayUrl = null; state.demo = false; state.measured = null;
-    state.rotation = 0; updateAvatarTransform();
-    $('#dress-file').value = ''; $('#cutout-toggle').checked = false;
-    $('#garment-size').value = 68; $('#garment-position').value = 52; $('#garment-opacity').value = 92;
-    updateRangeStyles(); overlay.removeAttribute('src'); overlay.hidden = true;
-    $('#dimension-readout').hidden = true; $('#stage-dimension').hidden = true;
-    $('#calibration-legend').innerHTML = '<i class=\"legend-dot dot-unmeasured\"></i> Not calibrated';
-    $('#confidence-note').innerHTML = '<span class=\"confidence-mark\">i</span><p><strong>A visual approximation.</strong> This avatar uses height and weight only. It doesn\'t model full body shape, depth, fabric drape or stretch, tailoring, comfort, or guaranteed real-world fit.</p>';
-    $('#garment-caption').textContent = 'Neutral form · no garment added';
-    $('#compare-button').disabled = true; $('#restart-button').disabled = true;
-    setComparing(false); setStatus('Add a dress image to begin.', 'idle');
-  });
+  $('#help-button').addEventListener('click', () => $('#help-dialog').showModal());
+  $('#restart-button').addEventListener('click', resetDress);
   $('#compare-button').addEventListener('click', () => { if (state.originalUrl) setComparing(!state.comparing); });
+  $('#model-male').addEventListener('click', () => loadModel('men'));
+  $('#model-female').addEventListener('click', () => loadModel('women'));
   $('#rotate-button').addEventListener('click', () => {
-    state.rotation = state.rotation >= 360 ? 0 : state.rotation + 28;
-    updateAvatarTransform();
-    $('#stage-mode').textContent = `AVATAR STUDY · ${state.rotation % 56 ? 'TURN' : 'FRONT'}`;
+    state.targetYaw += Math.PI / 2;
+    updateViewLabel();
   });
-
-  // Allow direct manipulation of the dress layer inside the stage.
-  let dragStart = null;
-  layer.addEventListener('pointerdown', (event) => {
-    if (!overlay.src || overlay.hidden || state.comparing) return;
-    dragStart = { y: event.clientY, top: Number($('#garment-position').value) };
-    layer.setPointerCapture(event.pointerId);
+  $('#reset-view-button').addEventListener('click', () => {
+    state.targetYaw = 0;
+    updateViewLabel();
   });
-  layer.addEventListener('pointermove', (event) => {
-    if (!dragStart) return;
-    const delta = (event.clientY - dragStart.y) / stage.clientHeight * 100;
-    const next = Math.max(28, Math.min(76, Math.round(dragStart.top + delta)));
-    $('#garment-position').value = next;
-    updateRangeStyles();
-  });
-  layer.addEventListener('pointerup', () => { dragStart = null; });
-  layer.addEventListener('pointercancel', () => { dragStart = null; });
+  $('#camera-dialog').addEventListener('click', (event) => { if (event.target === $('#camera-dialog')) closeCamera(); });
 
   updateProfile();
   updateRangeStyles();
+  initViewer();
 })();

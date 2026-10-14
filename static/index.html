@@ -3,144 +3,131 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#f4f1ea" />
-  <meta name="description" content="A measurement-aware virtual dress preview on a simple animated avatar." />
-  <title>Hamvater — The fitting studio</title>
+  <meta name="theme-color" content="#f8f8f6" />
+  <meta name="description" content="A simple dress preview on a selectable male or female 3D fitting model." />
+  <title>Hamvater — fitting room</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/styles.css" />
+  <script type="importmap">{"imports":{"three":"/static/vendor/three/build/three.module.js"}}</script>
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/" aria-label="Hamvater home">
-      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M8 7v26M32 7v26M8 13h24M8 27h24"/><path d="M13 13v14m14-14v14"/><path class="brand-tick" d="M3 20h7m20 0h7"/></svg></span>
-      <span class="brand-name">hamvater<span class="brand-period">.</span></span>
+    <a class="brand" href="/" aria-label="Hamvater fitting room">
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M8 7v26M32 7v26M8 13h24M8 27h24"/><path class="brand-tick" d="M3 20h7m20 0h7"/></svg></span>
+      <span class="brand-name">hamvater<span>.</span></span>
     </a>
-    <div class="topbar-meta"><span class="status-dot"></span> THE VIRTUAL FITTING STUDIO</div>
-    <a class="top-link" href="#how-it-works">How it works <span aria-hidden="true">↗</span></a>
+    <div class="workspace-label"><span class="status-dot"></span> FITTING ROOM</div>
+    <button class="quiet-button help-button" type="button" id="help-button">About this preview</button>
   </header>
 
-  <main class="app-shell">
-    <section class="intro-row" aria-labelledby="page-title">
-      <div>
-        <div class="eyebrow"><span>ATELIER STUDY</span><span class="eyebrow-line"></span><span>NO. 01</span></div>
-        <h1 id="page-title">A first look,<br /><em>before the fitting.</em></h1>
-        <p class="intro-copy">Shape a simple avatar, scan a dress and see the silhouette come together. Made for exploring—not promising a fit.</p>
-      </div>
-      <div class="intro-note"><span class="note-index">01 / 03</span><span>Profile, garment, preview</span></div>
-    </section>
-
-    <section class="workbench" aria-label="Virtual fitting workbench">
-      <aside class="control-rail">
-        <section class="control-card profile-card" aria-labelledby="profile-heading">
-          <div class="section-kicker"><span class="step-number">01</span><span>YOUR PROFILE</span></div>
-          <h2 id="profile-heading">Set the form</h2>
-          <p class="card-copy">Two measurements create a very simple body proportion. They do not describe your full shape.</p>
-          <div class="unit-switches" aria-label="Measurement units">
-            <div class="unit-pair" role="group" aria-label="Height unit">
-              <button class="unit-button active" data-height-unit="cm" type="button" aria-pressed="true">cm</button>
-              <button class="unit-button" data-height-unit="ft" type="button" aria-pressed="false">ft</button>
-            </div>
-            <div class="unit-pair" role="group" aria-label="Weight unit">
-              <button class="unit-button active" data-weight-unit="kg" type="button" aria-pressed="true">kg</button>
-              <button class="unit-button" data-weight-unit="lb" type="button" aria-pressed="false">lb</button>
-            </div>
-          </div>
-          <div class="measure-field">
-            <label for="height-input">Height <span id="height-unit-label">cm</span></label>
-            <div class="number-input-wrap"><input id="height-input" type="number" min="100" max="240" step="1" value="170" inputmode="decimal" /><span class="input-unit" id="height-suffix">cm</span></div>
-            <span class="field-error" id="height-error" aria-live="polite"></span>
-          </div>
-          <div class="measure-field">
-            <label for="weight-input">Weight <span id="weight-unit-label">kg</span></label>
-            <div class="number-input-wrap"><input id="weight-input" type="number" min="25" max="300" step="0.5" value="68" inputmode="decimal" /><span class="input-unit" id="weight-suffix">kg</span></div>
-            <span class="field-error" id="weight-error" aria-live="polite"></span>
-          </div>
-          <div class="profile-readout"><span class="readout-mark">↗</span><span id="profile-readout">Approximate proportions · profile not saved</span></div>
-        </section>
-
-        <section class="control-card scan-card" aria-labelledby="scan-heading">
-          <div class="section-kicker"><span class="step-number">02</span><span>GARMENT SCAN</span></div>
-          <h2 id="scan-heading">Bring a dress</h2>
-          <p class="card-copy">A flat, full-length photo works best. Use even light and leave space around the garment.</p>
-          <div class="capture-actions">
-            <label class="button button-primary upload-button" for="dress-file"><span aria-hidden="true">↑</span> Upload image</label>
-            <input id="dress-file" type="file" accept="image/png,image/jpeg,image/webp" hidden />
-            <button class="button button-secondary" id="camera-button" type="button"><span aria-hidden="true">◎</span> Use camera</button>
-          </div>
-          <div class="sample-row"><span>Just looking around?</span><button type="button" class="text-button" id="demo-button">Try the sample dress <span aria-hidden="true">→</span></button></div>
-          <div class="scan-guidance"><span class="guidance-icon" aria-hidden="true">✳</span><span><strong>For measured dimensions</strong> place marker #0 beside the dress, flat in the same plane.</span></div>
-          <button class="marker-link" type="button" id="marker-open"><span class="mini-ruler" aria-hidden="true">╋</span> Print the 5 cm calibration marker <span aria-hidden="true">↗</span></button>
-          <button class="button button-scan" id="scan-button" type="button" disabled><span aria-hidden="true">⌕</span> Scan garment dimensions</button>
-          <div id="scan-status" class="scan-status" role="status" aria-live="polite"><span class="status-indicator"></span><span>Add a dress image to begin.</span></div>
-          <div class="dimension-readout" id="dimension-readout" hidden>
-            <div><span class="dimension-label">EST. WIDTH</span><strong id="dimension-width">—</strong><span>cm</span></div>
-            <div><span class="dimension-label">EST. LENGTH</span><strong id="dimension-height">—</strong><span>cm</span></div>
-          </div>
-        </section>
-
-        <section class="control-card overlay-card" aria-labelledby="overlay-heading">
-          <div class="section-kicker"><span class="step-number">03</span><span>PLACE & INSPECT</span></div>
-          <h2 id="overlay-heading">Tune the preview</h2>
-          <p class="card-copy">Drag the garment on the avatar, or fine-tune its placement here.</p>
-          <label class="range-label" for="garment-size"><span>Garment scale</span><output id="size-output">68%</output></label>
-          <input id="garment-size" type="range" min="32" max="94" value="68" />
-          <label class="range-label" for="garment-position"><span>Vertical position</span><output id="position-output">52%</output></label>
-          <input id="garment-position" type="range" min="28" max="76" value="52" />
-          <label class="range-label" for="garment-opacity"><span>Overlay opacity</span><output id="opacity-output">92%</output></label>
-          <input id="garment-opacity" type="range" min="40" max="100" value="92" />
-          <label class="check-row"><input type="checkbox" id="cutout-toggle" /><span class="fake-check" aria-hidden="true"></span><span>Try removing a light, plain backdrop</span></label>
-          <p class="micro-note">Backdrop removal is optional; it may also soften fabric close in colour to the background.</p>
-        </section>
-      </aside>
-
-      <section class="preview-column" aria-labelledby="preview-heading">
-        <div class="preview-heading-row">
-          <div><div class="section-kicker"><span class="step-number">04</span><span>THE LOOK</span></div><h2 id="preview-heading">Your fitting study</h2></div>
-          <div class="preview-actions"><button type="button" id="restart-button" class="restart-button" disabled>Start over</button><button type="button" id="rotate-button" class="icon-button" aria-label="Turn avatar">↻ <span>Turn</span></button><button type="button" id="compare-button" class="compare-button" disabled>Compare image</button></div>
+  <main class="workspace" aria-label="Virtual fitting room">
+    <aside class="side-rail profile-rail" aria-label="Model and profile controls">
+      <section class="rail-section">
+        <div class="rail-heading"><span>MODEL</span><span class="rail-step">01</span></div>
+        <h1>Choose a form</h1>
+        <div class="model-switch" role="group" aria-label="Preview model">
+          <button class="model-choice selected" type="button" id="model-male" aria-pressed="true">
+            <span class="choice-icon choice-male" aria-hidden="true"><svg viewBox="0 0 24 32"><circle cx="12" cy="5" r="3"/><path d="M7 11 5 19m12-8 2 8M9 10h6l2 10-1 8m-6-8 1 8m-4-9h10"/></svg></span>
+            <span><strong>Men</strong><small>Adult model</small></span>
+          </button>
+          <button class="model-choice" type="button" id="model-female" aria-pressed="false">
+            <span class="choice-icon choice-female" aria-hidden="true"><svg viewBox="0 0 24 32"><circle cx="12" cy="5" r="3"/><path d="M8 11 5 18l2 4h10l2-4-3-7M9 10h6l3 11-1 7m-8-7 1 7m-4-8h12"/></svg></span>
+            <span><strong>Women</strong><small>Adult model</small></span>
+          </button>
         </div>
-        <div class="stage" id="avatar-stage" aria-label="Animated avatar and dress overlay preview">
-          <div class="stage-grid" aria-hidden="true"></div>
-          <span class="stage-corner corner-tl" aria-hidden="true">+</span><span class="stage-corner corner-tr" aria-hidden="true">+</span><span class="stage-corner corner-bl" aria-hidden="true">+</span><span class="stage-corner corner-br" aria-hidden="true">+</span>
-          <div class="stage-topline"><span id="stage-mode">AVATAR STUDY · FRONT</span><span class="stage-dashes">— — — —</span><span>1:1 VIEW</span></div>
-          <div class="stage-measure measure-side"><span>PROFILE-BASED</span><i></i><span>APPROX.</span></div>
-          <div class="avatar-rig" id="avatar-rig" aria-label="Avatar in a neutral pose">
-            <div class="avatar-idle">
-              <svg class="avatar-svg" viewBox="0 0 400 600" role="img" aria-label="Simplified neutral body avatar">
-                <ellipse cx="200" cy="567" rx="77" ry="13" fill="#183a47" opacity=".11" />
-                <g class="avatar-body">
-                  <path d="M181 111h38v53h-38z" fill="#bf8f78" />
-                  <ellipse cx="200" cy="77" rx="35" ry="43" fill="#d0a38a" />
-                  <path d="M166 76c0-30 14-47 38-47 22 0 37 16 36 45-8-10-15-18-26-24-12 11-27 17-48 19z" fill="#4a3935" />
-                  <path d="M170 149c9-10 19-15 30-15s22 5 31 15l29 24-13 89-17 82h-61l-17-82-13-89z" fill="#d0a38a" />
-                  <path d="M171 150c-21 5-34 18-42 39l-24 114c-3 14 5 24 16 25 9 0 15-7 19-18l37-95 9-39z" fill="#c99980" />
-                  <path d="M229 150c21 5 34 18 42 39l24 114c3 14-5 24-16 25-9 0-15-7-19-18l-37-95-9-39z" fill="#c99980" />
-                  <path d="M169 326h62l-6 105-3 116h-34l-13-120-9 120h-34l9-124z" fill="#8c9a91" />
-                  <path d="M176 541h45l9 21c2 6-2 10-9 10h-44c-8 0-11-4-9-10zM127 541h40l-3 21c-1 6-4 10-11 10h-43c-7 0-10-4-7-10z" fill="#183a47" />
-                  <path d="M167 166c13-12 24-15 33-15s22 4 34 15l-3 158c-19 13-43 13-62 0z" fill="#e8dfd1" stroke="#bfbaaD" stroke-width="1.5" />
-                  <path d="M190 154l10 14 10-14" fill="none" stroke="#d98f70" stroke-width="2" />
-                </g>
-              </svg>
-              <div class="garment-layer" id="garment-layer" aria-label="Movable garment preview"><img id="garment-overlay" alt="Uploaded dress over the avatar" hidden /></div>
-              <div class="avatar-tick" aria-hidden="true"><i></i><i></i><i></i></div>
-            </div>
-          </div>
-          <div id="comparison-view" class="comparison-view" hidden><img id="comparison-image" alt="Original dress scan for comparison" /><span>ORIGINAL GARMENT IMAGE</span></div>
-          <div class="stage-footer"><span id="garment-caption">Neutral form · no garment added</span><span class="breath-mark"><i></i> LIVE STUDY</span></div>
-          <div class="stage-dimension" id="stage-dimension" hidden><span>ESTIMATED CONTOUR</span><strong id="stage-dimension-value">—</strong></div>
-        </div>
-        <div class="preview-legend"><span><i class="legend-dot dot-profile"></i> Profile estimate</span><span><i class="legend-dot dot-garment"></i> Garment layer</span><span id="calibration-legend"><i class="legend-dot dot-unmeasured"></i> Not calibrated</span></div>
-        <div class="confidence-note" id="confidence-note"><span class="confidence-mark">i</span><p><strong>A visual approximation.</strong> This avatar uses height and weight only. It doesn't model full body shape, depth, fabric drape or stretch, tailoring, comfort, or guaranteed real-world fit.</p></div>
+        <p class="model-note">Select a form to change the model. Your profile values only adjust its approximate proportions.</p>
       </section>
+
+      <section class="rail-section profile-section" aria-labelledby="profile-heading">
+        <div class="rail-heading"><span id="profile-heading">BODY BASICS</span><span class="rail-step">02</span></div>
+        <div class="unit-heading"><span>Height</span><div class="unit-pair" role="group" aria-label="Height unit"><button class="unit-button active" data-height-unit="cm" type="button" aria-pressed="true">cm</button><button class="unit-button" data-height-unit="ft" type="button" aria-pressed="false">ft</button></div></div>
+        <div class="number-input-wrap"><input id="height-input" aria-label="Height" type="number" min="100" max="240" step="1" value="170" inputmode="decimal" /><span id="height-suffix">cm</span></div>
+        <span class="field-error" id="height-error" aria-live="polite"></span>
+        <div class="unit-heading weight-heading"><span>Weight</span><div class="unit-pair" role="group" aria-label="Weight unit"><button class="unit-button active" data-weight-unit="kg" type="button" aria-pressed="true">kg</button><button class="unit-button" data-weight-unit="lb" type="button" aria-pressed="false">lb</button></div></div>
+        <div class="number-input-wrap"><input id="weight-input" aria-label="Weight" type="number" min="25" max="300" step="0.5" value="68" inputmode="decimal" /><span id="weight-suffix">kg</span></div>
+        <span class="field-error" id="weight-error" aria-live="polite"></span>
+        <p class="profile-readout" id="profile-readout">170 cm · approximate proportions</p>
+      </section>
+
+      <p class="rail-footnote">3D fitting forms · no body scan</p>
+    </aside>
+
+    <section class="model-column" aria-label="3D model preview">
+      <div class="model-toolbar">
+        <div class="model-status"><span class="status-dot"></span><span id="model-status">Loading model…</span></div>
+        <div class="view-actions">
+          <span class="view-label" id="stage-mode">FRONT VIEW</span>
+          <button type="button" id="rotate-button" class="tool-button" aria-label="Turn model">Turn</button>
+          <button type="button" id="reset-view-button" class="tool-button" aria-label="Reset model view">Front</button>
+          <button type="button" id="compare-button" class="tool-button compare-button" disabled>Compare</button>
+          <button type="button" id="restart-button" class="tool-button restart-button" disabled>Clear dress</button>
+        </div>
+      </div>
+
+      <div class="model-stage" id="avatar-stage" aria-label="Interactive three-dimensional fitting model">
+        <div class="stage-caption stage-caption-top"><span id="stage-model-name">MALE FITTING MODEL</span><span>DRAG TO TURN</span></div>
+        <canvas id="avatar-canvas" aria-label="Turnable three-dimensional adult fitting model"></canvas>
+        <div class="garment-layer" id="garment-layer" aria-hidden="true"><img id="garment-overlay" alt="" hidden /></div>
+        <div id="model-fallback" class="model-fallback" hidden>
+          <svg viewBox="0 0 240 620" role="img" aria-label="Simple fitting model placeholder">
+            <ellipse cx="120" cy="588" rx="55" ry="10" />
+            <circle cx="120" cy="63" r="28" />
+            <path d="M103 94h34v40h-34zM89 134q31-19 62 0l30 25 21 107-38 10-22-75v126H98V201l-22 75-38-10 21-107zM98 326h44l-5 156-20 6-18-6-10-156zM98 484h24v91H96zM128 484h24v91h-26z" />
+          </svg>
+        </div>
+        <div class="comparison-view" id="comparison-view" hidden><img id="comparison-image" alt="Original dress image" /><span>ORIGINAL IMAGE</span></div>
+        <div class="stage-bottom"><span id="garment-caption">Select a model or add a dress</span><span class="turn-hint">↔ &nbsp; rotate to inspect</span></div>
+      </div>
+      <div class="model-footer"><span id="model-body-note">Profile estimate · dimensions are approximate</span><span class="live-indicator"><i></i> LIVE MODEL</span></div>
     </section>
 
-    <section class="how-section" id="how-it-works"><div><div class="section-kicker"><span class="step-number">NOTE</span><span>HOW TO READ THIS</span></div><h2>A study, not a size promise.</h2></div><div class="how-copy"><p>The linked detector estimates the outline of a visible object against a known <strong>5 × 5 cm ArUco marker</strong>. Put both in one plane for the marker's scale to be useful. The scan does not understand garment construction, folds, or body dimensions.</p><p>Use the result to explore a silhouette. For sizing, compare the garment's own measurements with a reliable size chart and try the piece on when you can.</p></div></section>
-    <footer class="footer"><a class="brand footer-brand" href="/" aria-label="Hamvater home"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M8 7v26M32 7v26M8 13h24M8 27h24"/><path class="brand-tick" d="M3 20h7m20 0h7"/></svg></span><span class="brand-name">hamvater<span class="brand-period">.</span></span></a><span>AN EXPERIMENT IN SEEING HOW IT COULD LOOK.</span><span>© HAMVATER STUDIO</span></footer>
+    <aside class="side-rail garment-rail" aria-label="Garment scan and overlay controls">
+      <section class="rail-section">
+        <div class="rail-heading"><span>GARMENT</span><span class="rail-step">03</span></div>
+        <h2>Bring a dress</h2>
+        <p class="rail-copy">A clear, flat photo works best. Keep the full outline in frame.</p>
+        <div class="capture-actions">
+          <label class="button button-primary upload-button" for="dress-file">Upload image</label>
+          <input id="dress-file" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+          <button class="button button-secondary" id="camera-button" type="button">Use camera</button>
+        </div>
+        <button type="button" class="sample-button" id="demo-button">Load sample dress <span>→</span></button>
+        <div class="scan-guidance"><strong>For measurements</strong><span>Place marker #0 beside the dress, flat in the same plane.</span></div>
+        <button class="marker-link" type="button" id="marker-open">Print the 5 cm marker ↗</button>
+        <button class="button button-scan" id="scan-button" type="button" disabled>Scan garment dimensions</button>
+        <div id="scan-status" class="scan-status" role="status" aria-live="polite"><i></i><span>Add a dress image to begin.</span></div>
+        <div class="dimension-readout" id="dimension-readout" hidden>
+          <div><small>EST. WIDTH</small><strong id="dimension-width">—</strong><span>cm</span></div>
+          <div><small>EST. LENGTH</small><strong id="dimension-height">—</strong><span>cm</span></div>
+        </div>
+      </section>
+
+      <section class="rail-section fit-section" aria-labelledby="fit-heading">
+        <div class="rail-heading"><span id="fit-heading">PREVIEW</span><span class="rail-step">04</span></div>
+        <h2>Adjust layer</h2>
+        <p class="rail-copy">The garment is a flat image layer, not fitted 3D fabric.</p>
+        <label class="range-label" for="garment-size"><span>Scale</span><output id="size-output">68%</output></label>
+        <input id="garment-size" type="range" min="32" max="94" value="68" />
+        <label class="range-label" for="garment-position"><span>Vertical position</span><output id="position-output">52%</output></label>
+        <input id="garment-position" type="range" min="28" max="76" value="52" />
+        <label class="range-label" for="garment-opacity"><span>Opacity</span><output id="opacity-output">92%</output></label>
+        <input id="garment-opacity" type="range" min="40" max="100" value="92" />
+        <label class="check-row"><input type="checkbox" id="cutout-toggle" /><span class="fake-check" aria-hidden="true"></span><span>Remove light plain backdrop</span></label>
+        <p class="micro-note">Backdrop removal may soften fabric that is close in colour.</p>
+      </section>
+
+      <p class="confidence-note" id="confidence-note"><strong>Approximate preview.</strong> No body scan, cloth simulation or guaranteed fit.</p>
+    </aside>
   </main>
 
-  <dialog class="modal" id="camera-dialog"><div class="modal-head"><div><span class="section-kicker">CAMERA CAPTURE</span><h2>Frame the full dress</h2></div><button class="modal-close" type="button" data-close="camera-dialog" aria-label="Close">×</button></div><p class="modal-copy">Keep the hem, shoulders, and 5 cm marker in frame. Camera access is used only for this preview session.</p><video id="camera-video" autoplay playsinline muted></video><div class="modal-actions"><button class="button button-primary" type="button" id="capture-button">Capture scan</button><button class="button button-secondary" type="button" data-close="camera-dialog">Cancel</button></div><p class="modal-error" id="camera-error" aria-live="polite"></p></dialog>
-  <dialog class="modal marker-modal" id="marker-dialog"><div class="modal-head"><div><span class="section-kicker">CALIBRATION REFERENCE · MARKER #0</span><h2>Print at actual size</h2></div><button class="modal-close" type="button" data-close="marker-dialog" aria-label="Close">×</button></div><p class="modal-copy">Print without “fit to page” scaling. Measure the black square after printing: it must be exactly 5 × 5 cm. Place it flat beside the dress and in the same plane before scanning.</p><div class="print-sheet"><img id="print-marker" src="/api/marker.png" alt="DICT_5X5_50 ArUco calibration marker number 0" /><span>5 cm</span></div><div class="modal-actions"><button class="button button-primary" id="print-button" type="button">Print marker</button><button class="button button-secondary" type="button" data-close="marker-dialog">Close</button></div><p class="modal-error">If your printer resizes the page, reprint and verify the black marker measures 5 cm on each side.</p></dialog>
-  <script src="/static/app.js" defer></script>
+  <dialog class="modal" id="camera-dialog"><div class="modal-head"><div><span class="rail-heading">CAMERA CAPTURE</span><h2>Frame the full dress</h2></div><button class="modal-close" type="button" data-close="camera-dialog" aria-label="Close">×</button></div><p class="modal-copy">Keep the hem, shoulders, and 5 cm marker in frame. Camera access is used only for this preview session.</p><video id="camera-video" autoplay playsinline muted></video><div class="modal-actions"><button class="button button-primary" type="button" id="capture-button">Capture</button><button class="button button-secondary" type="button" data-close="camera-dialog">Cancel</button></div><p class="modal-error" id="camera-error" aria-live="polite"></p></dialog>
+
+  <dialog class="modal marker-modal" id="marker-dialog"><div class="modal-head"><div><span class="rail-heading">CALIBRATION · MARKER #0</span><h2>Print at actual size</h2></div><button class="modal-close" type="button" data-close="marker-dialog" aria-label="Close">×</button></div><p class="modal-copy">Print without “fit to page” scaling. Measure the black square: it must be exactly 5 × 5 cm. Place it beside the dress in the same plane.</p><div class="print-sheet"><img id="print-marker" src="/api/marker.png" alt="ArUco marker zero" /><span>5 cm</span></div><div class="modal-actions"><button class="button button-primary" id="print-button" type="button">Print marker</button><button class="button button-secondary" type="button" data-close="marker-dialog">Close</button></div><p class="modal-error">Verify the printed black square with a ruler before scanning.</p></dialog>
+
+  <dialog class="modal" id="help-dialog"><div class="modal-head"><div><span class="rail-heading">ABOUT THIS PREVIEW</span><h2>An image layer on a model</h2></div><button class="modal-close" type="button" data-close="help-dialog" aria-label="Close">×</button></div><p class="modal-copy">The male and female forms are original 3D fitting models. Height and weight adjust only their rough display proportions. The garment remains a flat image layer; it does not wrap, drape or stretch like real fabric.</p><p class="modal-copy">For scan estimates, place the printed 5 × 5 cm ArUco marker beside the whole garment in the same plane. An estimate is not a fit promise. Compare a garment's real measurements with its size chart.</p></dialog>
+
+  <script type="module" src="/static/app.js"></script>
 </body>
 </html>

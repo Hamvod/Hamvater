@@ -106,7 +106,7 @@ class SizeDetector:
             }
 
         area, contour = max(candidates, key=lambda candidate: candidate[0])
-        _, _, contour_width_px, contour_height_px = cv2.boundingRect(contour)
+        bounds_x, bounds_y, contour_width_px, contour_height_px = cv2.boundingRect(contour)
         width_cm = float(contour_width_px) / pixels_per_cm
         height_cm = float(contour_height_px) / pixels_per_cm
         return {
@@ -116,5 +116,6 @@ class SizeDetector:
             "guidance": "Use the measurement as an approximate garment dimension, not a size or fit guarantee.",
             "reference": {"required": "5 × 5 cm ArUco, DICT_5X5_50", "markerIdsDetected": marker_ids, "markerSidePixels": round(marker_side_px, 1), "pixelsPerCm": round(pixels_per_cm, 2)},
             "dimensions": {"widthCm": round(width_cm, 1), "heightCm": round(height_cm, 1), "contourAreaPixels": round(area)},
+            "garmentBounds": {"x": int(bounds_x), "y": int(bounds_y), "width": int(contour_width_px), "height": int(contour_height_px), "imageWidth": int(image_w), "imageHeight": int(image_h)},
             "confidenceNote": "Marker recognized; perspective, garment folds, background, and same-plane alignment are not independently verified.",
         }

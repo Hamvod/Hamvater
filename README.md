@@ -1,34 +1,35 @@
 # Hamvater
 
-Hamvater is a measurement-aware virtual dress fitting **prototype**. It combines a lightweight animated avatar with an uploaded or captured garment image, and can estimate a garment contour when the linked detector's calibration conditions are met.
+A minimal dress-preview workspace centred on original adult male and female 3D fitting models. Users select a model, enter height and weight, upload or capture a dress image, and position a flat garment layer for visual exploration.
 
 ## Run locally
 
-Requires Python 3.11 or later. From the project directory:
+Requires Python 3.11 or newer.
 
-```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-python server.py
+```sh
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/gunicorn --bind 0.0.0.0:3000 server:app
 ```
 
-Open `http://localhost:3000`. Camera capture requires browser camera permission and a secure browser context (localhost is treated as secure).
+Open `http://localhost:3000`. The model viewer and GLB assets are served from the project itself; no browser-side package installation or runtime CDN is needed. For local development, `python server.py` also starts Flask on port 3000.
 
-## Scan calibration
+## Model and dress preview
 
-The measurement adapter preserves the approach used by [`xcapt0/object_size_detector`](https://github.com/xcapt0/object_size_detector): it detects a `DICT_5X5_50` ArUco marker and assumes that the printed square is **exactly 5 × 5 cm**. Use “Print the 5 cm calibration marker” in the app, print marker #0 with scaling disabled, verify its black square is 5 cm on each side, then lay the whole dress and marker flat in the same plane. The estimate is based on a thresholded external contour; perspective, folds, lighting, touching objects, and backdrop can all affect it. A missing or unreadable marker never produces a calibrated result.
+Switch between the male and female adult fitting model from the left rail. Drag on the model or use **Turn** and **Front** to inspect it. Height and weight produce only a crude change to displayed proportions; they do not rebuild the body or scan the user. The models are original generated GLB assets created for clothing preview, in modest neutral fitting suits. The supplied male image and Mozaweb female scene informed the requested full-body/interactable presentation; neither reference's model assets are copied into Hamvater.
 
-`POST /api/scan` accepts JSON `{ "imageBase64": "data:image/jpeg;base64,..." }` and processes the image in memory. `GET /api/health` is a health check. `GET /api/marker.png` supplies marker #0 for the print dialog. User images are not written to disk or retained by the server.
+Upload JPG, PNG, or WebP (maximum 12 MB), capture a photo with the camera, or try the sample dress. In front view, the garment is a flat 2D image overlay placed over the selected 3D model; it is hidden while the model is turned so the preview is not mistaken for a physically fitted 3D garment. A calibrated scan uses the contour width/length relative to the entered height for overlay scale and crops the fitting layer to the separate garment outline, excluding the marker; **Compare** still shows the original uploaded scan. This is not a body scan or fit test. Image backdrop removal is an optional basic heuristic and may remove fabric colours that resemble the background.
 
-## What the preview means
+## Measurement engine
 
-Height and weight change only a simplified avatar proportion. The garment image is a draggable/scalable/opacity-adjustable 2D overlay. Optional light-background cutout runs in the browser. This is not body scanning, garment segmentation, a size recommender, 3D cloth simulation, or a fitting guarantee. It does not model full body shape, depth, fabric drape/stretch, tailoring, or comfort. Use the displayed dimensions as a rough visual aid and confirm sizing with the garment's own chart and a real fitting.
+The service adapts the MIT-licensed OpenCV detector requested at <https://github.com/xcapt0/object_size_detector>. Print marker #0 from the on-page print dialog and verify the black square is exactly **5 × 5 cm**. Place it beside the full dress, flat in the same plane. The service uses DICT_5X5_50 marker geometry and estimates the outer contour. Missing or unclear markers are reported as uncalibrated; scans never get a fabricated size.
 
-## Runtime
+The scanned image is processed in memory and is not persisted. `GET /api/health` is the service health endpoint; `GET /manus-routes.json` declares the single page route.
 
-The Flask app listens on `0.0.0.0:$PORT` (default port 3000). To build the production container: `docker build -t hamvater .`.
+## Important limitations
 
-## Attribution
+This is a visual prototype. The detector estimates object outlines, not garment construction or body dimensions. The model/profile uses height and weight only and cannot represent someone's actual individual body shape. The garment image is a flat layer, not fitted cloth; the preview does not model fabric depth, drape, stretch, tailoring, or comfort and does not guarantee real-world fit. Check a garment's size chart and measurements for sizing decisions.
 
-`engine/object_size_detector.py` adapts the measurement method from `xcapt0/object_size_detector`, Copyright (c) 2022 xcapt0, distributed under the MIT License. The upstream license is preserved in `engine/LICENSE.object_size_detector`.
+## Licenses
+
+The adapted detector's MIT notice is preserved at `engine/LICENSE.object_size_detector`. Three.js v0.174.0 is vendored for local viewer delivery, with its upstream license at `static/vendor/three/LICENSE`; the compressed-GLB Meshopt decoder's MIT notice is at `static/vendor/three/LICENSE.meshoptimizer`.
