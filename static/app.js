@@ -21,6 +21,8 @@ import { MeshoptDecoder } from './vendor/three/examples/jsm/libs/meshopt_decoder
   let avatarRoot;
   let modelObject;
   let latestTextureRequest = 0;
+  let backgroundRequestId = 0;
+  let scanRequestId = 0;
   let requestId = 0;
   let mixer = null;
   let activePointer = null;
@@ -148,7 +150,7 @@ import { MeshoptDecoder } from './vendor/three/examples/jsm/libs/meshopt_decoder
       modelBox.hidden = true;
       updateProfileShape();
       if (state.displayUrl) setGarment(state.displayUrl);
-      $('#model-body-note').textContent = `${gender === 'women' ? 'Female' : 'Male'} model · profile estimate, not a body scan`;
+      $('#model-body-note').textContent = `${gender === 'women' ? 'Female' : 'Male'} form · ${heightLabel()} · ${weightLabel()} · estimate, not a body scan`;
       setModelStatus(`${name[0]}${name.slice(1).toLowerCase()} model ready`);
     }, undefined, () => {
       if (thisRequest !== requestId) return;
@@ -216,9 +218,19 @@ import { MeshoptDecoder } from './vendor/three/examples/jsm/libs/meshopt_decoder
 
   function updateProfileShape() {
     const bmi = state.weightKg / ((state.heightCm / 100) ** 2);
-    const width = Math.max(.86, Math.min(1.2, 1 + (bmi - 22) * .008));
-    const height = Math.max(.92, Math.min(1.08, state.heightCm / 170));
-    setProfileScales(width, height);
+    const boundedBMI = Math.max(15, Math.min(45, bmi));
+    const width = Math.max(.78, Math.min(1.32, (boundedBMI / 22) ** .45));
+    const heightScale = state.heightCm / 170;
+    setProfileScales(width, heightScale);
+    updateCameraFraming(heightScale);
+  }
+
+  function updateCameraFraming(heightScale) {
+    if (!camera) return;
+    const distanceScale = Math.max(1, heightScale / 1.12);
+    const targetY = 1.1 * heightScale;
+    camera.position.set(0, targetY + .04 * heightScale, 5.7 * distanceScale);
+    camera.lookAt(0, targetY, 0);
   }
 
   function onPointerDown(event) {
@@ -274,6 +286,11 @@ import { MeshoptDecoder } from './vendor/three/examples/jsm/libs/meshopt_decoder
     return state.heightUnit === 'cm' ? `${Math.round(state.heightCm)} cm` : `${(state.heightCm / 30.48).toFixed(2)} ft`;
   }
 
+  function weightLabel() {
+    if (state.weightUnit === 'kg') return `${Number(state.weightKg.toFixed(1))} kg`;
+    return `${(state.weightKg / .45359237).toFixed(1)} lb`;
+  }
+
   function parseHeight() {
     const value = Number(heightInput.value);
     const min = state.heightUnit === 'cm' ? 100 : 3.3;
@@ -307,8 +324,9 @@ import { MeshoptDecoder } from './vendor/three/examples/jsm/libs/meshopt_decoder
   function updateProfile() {
     if (!parseHeight() || !parseWeight()) return;
     updateProfileShape();
-    $('#profile-readout').textContent = `${heightLabel()} · approximate proportions`;
-    $('#model-body-note').textContent = `${state.gender === 'men' ? 'Male' : 'Female'} model · profile estimate, not a body scan`;
+    const profile = `${heightLabel()} · ${weightLabel()}`;
+    $('#profile-readout').textContent = `${profile} · approximate proportions`;
+    $('#model-body-note').textContent = `${state.gender === 'men' ? 'Male' : 'Female'} form · ${profile} · estimate, not a body scan`;
   }
 
   function updateRangeStyles() {
@@ -318,46 +336,116 @@ import { MeshoptDecoder } from './vendor/three/examples/jsm/libs/meshopt_decoder
     sizeGarmentPlane();
   }
 
-  function lightBackgroundCutout(sourceUrl) {
+  function plainBackgroundCutout(sourceUrl) {
     return new Promise((resolve) => {
+      const skipped = (message) => resolve({ url: sourceUrl, removed: false, message });
       const image = new Image();
       image.onload = () => {
-        const scale = Math.min(1, 900 / Math.max(image.naturalWidth, image.naturalHeight));
-        const work = document.createElement('canvas');
-        work.width = Math.max(1, Math.round(image.naturalWidth * scale));
-        work.height = Math.max(1, Math.round(image.naturalHeight * scale));
-        const context = work.getContext('2d', { willReadFrequently: true });
-        context.drawImage(image, 0, 0, work.width, work.height);
-        const pixels = context.getImageData(0, 0, work.width, work.height);
-        const { data, width, height } = pixels;
-        const edge = Math.max(1, Math.min(5, Math.round(Math.min(width, height) * .025)));
-        const corners = [];
-        for (const [cx, cy] of [[0, 0], [width - edge, 0], [0, height - edge], [width - edge, height - edge]]) {
-          let r = 0, g = 0, b = 0, count = 0;
-          for (let y = cy; y < Math.min(height, cy + edge); y++) for (let x = cx; x < Math.min(width, cx + edge); x++) {
-            const i = (y * width + x) * 4; r += data[i]; g += data[i + 1]; b += data[i + 2]; count++;
+        try {
+          const scale = Math.min(1, 900 / Math.max(image.naturalWidth, image.naturalHeight));
+          const work = document.createElement('canvas');
+          work.width = Math.max(1, Math.round(image.naturalWidth * scale));
+          work.height = Math.max(1, Math.round(image.naturalHeight * scale));
+          const context = work.getContext('2d', { willReadFrequently: true });
+          if (!context) { skipped('Backdrop removal is unavailable; the original image is shown.'); return; }
+          context.drawImage(image, 0, 0, work.width, work.height);
+          const pixels = context.getImageData(0, 0, work.width, work.height);
+          const { data, width, height } = pixels;
+          const edgeColors = [];
+          let edgeSamples = 0;
+          let transparentEdges = 0;
+          const edgeStep = Math.max(1, Math.floor(Math.min(width, height) / 95));
+          const sampleEdge = (x, y) => {
+            edgeSamples++;
+            const offset = (y * width + x) * 4;
+            if (data[offset + 3] < 32) { transparentEdges++; return; }
+            edgeColors.push([data[offset], data[offset + 1], data[offset + 2]]);
+          };
+          for (let x = 0; x < width; x += edgeStep) {
+            sampleEdge(x, 0);
+            sampleEdge(x, height - 1);
           }
-          corners.push([r / count, g / count, b / count]);
+          for (let y = edgeStep; y < height - 1; y += edgeStep) {
+            sampleEdge(0, y);
+            sampleEdge(width - 1, y);
+          }
+          if (edgeSamples && transparentEdges / edgeSamples > .55) {
+            skipped('The image already has transparent edges; no backdrop removal was needed.');
+            return;
+          }
+          if (edgeColors.length < 12) {
+            skipped('A plain background could not be isolated; the original image is shown.');
+            return;
+          }
+          const median = (values) => {
+            const ordered = [...values].sort((a, b) => a - b);
+            return ordered[Math.floor(ordered.length / 2)];
+          };
+          const target = [0, 1, 2].map((channel) => median(edgeColors.map((color) => color[channel])));
+          const edgeDistances = edgeColors.map((color) => Math.hypot(color[0] - target[0], color[1] - target[1], color[2] - target[2]));
+          const matchingEdges = edgeDistances.filter((distance) => distance <= 42);
+          if (matchingEdges.length / edgeColors.length < .62) {
+            skipped('Background removal skipped because the image edges are not plain and consistent; the original is shown.');
+            return;
+          }
+          const tolerance = Math.max(25, Math.min(58, 24 + median(matchingEdges) * 2.2));
+          const total = width * height;
+          const removed = new Uint8Array(total);
+          const queue = new Int32Array(total);
+          let head = 0;
+          let tail = 0;
+          const colorDistance = (pixel) => {
+            const offset = pixel * 4;
+            return Math.hypot(data[offset] - target[0], data[offset + 1] - target[1], data[offset + 2] - target[2]);
+          };
+          const visit = (pixel) => {
+            if (removed[pixel]) return;
+            const offset = pixel * 4;
+            if (data[offset + 3] > 16 && colorDistance(pixel) > tolerance) return;
+            removed[pixel] = 1;
+            queue[tail++] = pixel;
+          };
+          for (let x = 0; x < width; x++) {
+            visit(x);
+            visit((height - 1) * width + x);
+          }
+          for (let y = 1; y < height - 1; y++) {
+            visit(y * width);
+            visit(y * width + width - 1);
+          }
+          while (head < tail) {
+            const pixel = queue[head++];
+            const x = pixel % width;
+            const y = Math.floor(pixel / width);
+            if (x > 0) visit(pixel - 1);
+            if (x + 1 < width) visit(pixel + 1);
+            if (y > 0) visit(pixel - width);
+            if (y + 1 < height) visit(pixel + width);
+          }
+          if (tail < total * .015) {
+            skipped('No clear plain background was found; the original image is shown.');
+            return;
+          }
+          const touchesRemoved = (pixel, x, y) => (x > 0 && removed[pixel - 1]) || (x + 1 < width && removed[pixel + 1]) || (y > 0 && removed[pixel - width]) || (y + 1 < height && removed[pixel + width]);
+          for (let pixel = 0; pixel < total; pixel++) {
+            const offset = pixel * 4;
+            if (removed[pixel]) { data[offset + 3] = 0; continue; }
+            const x = pixel % width;
+            const y = Math.floor(pixel / width);
+            if (!touchesRemoved(pixel, x, y)) continue;
+            const distance = colorDistance(pixel);
+            if (distance < tolerance * 1.7) {
+              const keep = Math.max(.16, Math.min(1, (distance - tolerance * .55) / (tolerance * 1.05)));
+              data[offset + 3] = Math.round(data[offset + 3] * keep);
+            }
+          }
+          context.putImageData(pixels, 0, 0);
+          resolve({ url: work.toDataURL('image/png'), removed: true, message: 'Plain background removed from the fitting layer; scanning and Compare still use the original photo.' });
+        } catch (_error) {
+          skipped('Backdrop removal could not process this image; the original is shown.');
         }
-        const target = corners.reduce((acc, color) => acc.map((value, i) => value + color[i] / corners.length), [0, 0, 0]);
-        const spread = Math.max(...corners.map((color) => Math.hypot(color[0] - target[0], color[1] - target[1], color[2] - target[2])));
-        const light = (target[0] + target[1] + target[2]) / 3 > 145;
-        if (spread > 90 || !light) {
-          setStatus('Backdrop cutout skipped: corners are not one light plain background.', 'idle');
-          resolve(sourceUrl);
-          return;
-        }
-        const tolerance = spread < 35 ? 48 : 30;
-        for (let i = 0; i < data.length; i += 4) {
-          const distance = Math.hypot(data[i] - target[0], data[i + 1] - target[1], data[i + 2] - target[2]);
-          const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
-          if (distance < tolerance && brightness > 130) data[i + 3] = 0;
-          else if (distance < tolerance * 1.35 && brightness > 165) data[i + 3] = Math.round(data[i + 3] * .65);
-        }
-        context.putImageData(pixels, 0, 0);
-        resolve(work.toDataURL('image/png'));
       };
-      image.onerror = () => resolve(sourceUrl);
+      image.onerror = () => skipped('Backdrop removal could not open this image; the original is shown.');
       image.src = sourceUrl;
     });
   }
@@ -414,32 +502,51 @@ import { MeshoptDecoder } from './vendor/three/examples/jsm/libs/meshopt_decoder
   }
 
   async function applyGarment(url, name, isDemo = false) {
+    scanRequestId++;
+    const thisBackgroundRequest = ++backgroundRequestId;
+    $('#cutout-toggle').disabled = false;
     state.originalUrl = url;
     state.displayUrl = url;
     state.cropUrl = null;
     state.demo = isDemo;
     state.measured = null;
+    setGarmentVisible(false);
     $('#dimension-readout').hidden = true;
     $('#confidence-note').innerHTML = '<strong>Approximate preview.</strong> The image layer is flat; no cloth simulation or guaranteed fit.';
     $('#compare-button').disabled = false;
     $('#restart-button').disabled = false;
     $('#comparison-image').src = url;
     $('#garment-caption').textContent = isDemo ? 'Sample garment · not calibrated' : `${name} · not measured`;
-    if ($('#cutout-toggle').checked && !isDemo) state.displayUrl = await lightBackgroundCutout(url);
+    let cutoutResult = null;
+    if (isDemo) {
+      $('#cutout-toggle').checked = false;
+    } else {
+      $('#cutout-toggle').checked = true;
+      setStatus('Checking for a plain background locally…', 'busy');
+      cutoutResult = await plainBackgroundCutout(url);
+      if (thisBackgroundRequest !== backgroundRequestId) return;
+      state.displayUrl = cutoutResult.url;
+    }
     setGarment(state.displayUrl);
     $('#scan-button').disabled = isDemo;
     $('#scan-button').textContent = isDemo ? 'Sample dress · not measurable' : 'Scan garment dimensions';
-    setStatus(isDemo ? 'Sample dress loaded; its shape is illustrative only.' : 'Dress added. Add marker #0 in the same plane for a size estimate.', 'idle');
+    const removalNote = cutoutResult?.message ? ` ${cutoutResult.message}` : '';
+    setStatus(isDemo ? 'Sample dress loaded; its shape is illustrative only.' : `Dress added. Add marker #0 in the same plane for a size estimate.${removalNote}`, cutoutResult?.removed ? 'success' : 'idle');
     setComparing(false);
   }
 
   async function scanCurrentImage() {
     if (!state.originalUrl || state.demo) return;
+    const scanSourceUrl = state.originalUrl;
+    const thisScanRequest = ++scanRequestId;
     $('#scan-button').disabled = true;
+    $('#cutout-toggle').disabled = true;
     setStatus('Looking for the 5 cm ArUco marker and garment outline…', 'busy');
+    let cutoutResult = null;
     try {
-      const response = await fetch('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: state.originalUrl }) });
+      const response = await fetch('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: scanSourceUrl }) });
       const result = await response.json();
+      if (thisScanRequest !== scanRequestId || scanSourceUrl !== state.originalUrl) return;
       if (!response.ok) throw new Error(result.error || 'Scan failed. Try another image.');
       state.measured = result;
       if (result.status === 'calibrated_estimate' && result.dimensions) {
@@ -450,10 +557,18 @@ import { MeshoptDecoder } from './vendor/three/examples/jsm/libs/meshopt_decoder
         $('#garment-caption').textContent = `${widthCm.toFixed(1)} × ${heightCm.toFixed(1)} cm · contour estimate`;
         $('#confidence-note').innerHTML = `<strong>Marker calibrated, not independently verified.</strong> ${escapeHtml(result.confidenceNote || result.guidance)} The flat layer is scaled against your entered height; this is not a body scan or fit guarantee.`;
         if (result.garmentBounds) {
-          state.cropUrl = await cropImageToBounds(state.originalUrl, result.garmentBounds);
-          const garmentImage = state.cropUrl || state.originalUrl;
-          state.displayUrl = $('#cutout-toggle').checked ? await lightBackgroundCutout(garmentImage) : garmentImage;
-          setGarment(state.displayUrl);
+          const thisBackgroundRequest = ++backgroundRequestId;
+          const cropUrl = await cropImageToBounds(scanSourceUrl, result.garmentBounds);
+          if (thisScanRequest !== scanRequestId || scanSourceUrl !== state.originalUrl) return;
+          state.cropUrl = cropUrl;
+          const garmentImage = cropUrl || scanSourceUrl;
+          if ($('#cutout-toggle').checked) cutoutResult = await plainBackgroundCutout(garmentImage);
+          else cutoutResult = { url: garmentImage, removed: false, message: '' };
+          if (thisScanRequest !== scanRequestId || scanSourceUrl !== state.originalUrl) return;
+          if (thisBackgroundRequest === backgroundRequestId) {
+            state.displayUrl = cutoutResult.url;
+            setGarment(state.displayUrl);
+          }
         }
       } else {
         $('#dimension-readout').hidden = true;
@@ -462,9 +577,16 @@ import { MeshoptDecoder } from './vendor/three/examples/jsm/libs/meshopt_decoder
       }
       sizeGarmentPlane();
       const cropNote = result.garmentBounds ? ' The fitting layer excludes the separate marker; Compare retains the full scan.' : '';
-      setStatus(`${result.message} ${result.guidance}${cropNote}`, result.dimensions ? 'success' : 'error');
-    } catch (error) { setStatus(error.message || 'The scan could not reach the measurement service.', 'error'); }
-    finally { $('#scan-button').disabled = state.demo || !state.originalUrl; }
+      const removalNote = cutoutResult?.message ? ` ${cutoutResult.message}` : '';
+      setStatus(`${result.message} ${result.guidance}${cropNote}${removalNote}`, result.dimensions ? 'success' : 'error');
+    } catch (error) {
+      if (thisScanRequest === scanRequestId && scanSourceUrl === state.originalUrl) setStatus(error.message || 'The scan could not reach the measurement service.', 'error');
+    } finally {
+      if (thisScanRequest === scanRequestId) {
+        $('#cutout-toggle').disabled = false;
+        $('#scan-button').disabled = state.demo || !state.originalUrl;
+      }
+    }
   }
 
   function escapeHtml(text) {
@@ -480,14 +602,21 @@ import { MeshoptDecoder } from './vendor/three/examples/jsm/libs/meshopt_decoder
     updateViewLabel();
   }
 
-  function updateCutout() {
+  async function updateCutout() {
     if (!state.originalUrl || state.demo) return;
     const sourceUrl = state.cropUrl || state.originalUrl;
+    const thisBackgroundRequest = ++backgroundRequestId;
     if ($('#cutout-toggle').checked) {
-      lightBackgroundCutout(sourceUrl).then((url) => { state.displayUrl = url; setGarment(url); });
+      setStatus('Removing a plain background locally…', 'busy');
+      const result = await plainBackgroundCutout(sourceUrl);
+      if (thisBackgroundRequest !== backgroundRequestId) return;
+      state.displayUrl = result.url;
+      setGarment(state.displayUrl);
+      setStatus(result.message, result.removed ? 'success' : 'idle');
     } else {
       state.displayUrl = sourceUrl;
       setGarment(state.displayUrl);
+      setStatus('Original background restored in the fitting layer. Measurements and Compare still use the original photo.', 'idle');
     }
   }
 
@@ -540,13 +669,16 @@ import { MeshoptDecoder } from './vendor/three/examples/jsm/libs/meshopt_decoder
   }
 
   function resetDress() {
+    scanRequestId++;
+    backgroundRequestId++;
+    $('#cutout-toggle').disabled = false;
     state.originalUrl = null;
     state.displayUrl = null;
     state.cropUrl = null;
     state.demo = false;
     state.measured = null;
     $('#dress-file').value = '';
-    $('#cutout-toggle').checked = false;
+    $('#cutout-toggle').checked = true;
     $('#garment-size').value = 68;
     $('#garment-position').value = 52;
     $('#garment-opacity').value = 92;
